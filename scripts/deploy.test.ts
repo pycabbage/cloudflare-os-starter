@@ -19,6 +19,10 @@ const validConfig: DeploymentConfig = {
     context: { name: "acme-cloudflare-os-context" },
     scheduler: { name: "acme-cloudflare-os-scheduler" },
     customGatekeeper: { name: "acme-cloudflare-os-custom" },
+    github: { name: "acme-cloudflare-os-github" },
+    google: { name: "acme-cloudflare-os-google" },
+    cloudflare: { name: "acme-cloudflare-os-cloudflare" },
+    mcpPortal: { name: "acme-cloudflare-os-mcp-portal" },
     errorReporter: { name: "acme-cloudflare-os-errors" },
   },
   access: {
@@ -38,6 +42,7 @@ const validConfig: DeploymentConfig = {
     artifacts: { enabled: true, namespace: "acme-context-collections" },
   },
   customGatekeeper: { name: "Acme", message: "Use the company handbook." },
+  mcpPortal: { portalUrl: "https://portal.acme.example.com/mcp" },
   errorReporting: { enabled: true, environment: "production", release: "abc123" },
   resources: {
     blueprintsKvNamespaceId: "blueprints-kv-id",
@@ -74,6 +79,10 @@ async function baseConfigs(): Promise<BaseConfigs> {
     context: await baseConfig("../cloudflare-os/packages/gatekeeper-context/wrangler.jsonc"),
     scheduler: await baseConfig("../cloudflare-os/packages/gatekeeper-scheduler/wrangler.jsonc"),
     customGatekeeper: await baseConfig("../packages/custom-gatekeeper/wrangler.jsonc"),
+    github: await baseConfig("../cloudflare-os/packages/gatekeeper-github/wrangler.jsonc"),
+    google: await baseConfig("../cloudflare-os/packages/gatekeeper-google/wrangler.jsonc"),
+    cloudflare: await baseConfig("../cloudflare-os/packages/gatekeeper-cloudflare/wrangler.jsonc"),
+    mcpPortal: await baseConfig("../cloudflare-os/packages/gatekeeper-mcp-portal/wrangler.jsonc"),
     errorReporter: await baseConfig("../packages/error-reporter/wrangler.jsonc"),
   };
 }
@@ -186,6 +195,16 @@ test("rejects malformed AI Gateway providers and account", () => {
     /aiGateway.accountId must be null or 32 hexadecimal/i);
 });
 
+test("accepts the generic AI Gateway compat provider, needing no token for it", () => {
+  // Unlike "google", this provider rides the Workers AI binding fine (it reuses the same
+  // openai-completions transport as "cloudflare"/"openai"), so it adds no token requirement.
+  const config = variant((c) => {
+    c.aiGateway.providers = ["cloudflare", "cloudflare-ai-gateway"];
+  });
+  assert.doesNotThrow(() => validateConfig(config));
+  assert.equal(aiGatewayPlan(config)!.needsToken, false);
+});
+
 test("generates Access-mode Workshop, Context, and custom Gatekeeper configs", async () => {
   const generated = generateConfigs(validConfig, await baseConfigs());
   const vars = generated.workshop.vars!;
@@ -223,6 +242,26 @@ test("generates Access-mode Workshop, Context, and custom Gatekeeper configs", a
     {
       binding: "GATEKEEPER_CUSTOM",
       service: "acme-cloudflare-os-custom",
+      entrypoint: "GatekeeperVendor",
+    },
+    {
+      binding: "GATEKEEPER_GITHUB",
+      service: "acme-cloudflare-os-github",
+      entrypoint: "GatekeeperVendor",
+    },
+    {
+      binding: "GATEKEEPER_GOOGLE",
+      service: "acme-cloudflare-os-google",
+      entrypoint: "GatekeeperVendor",
+    },
+    {
+      binding: "GATEKEEPER_CLOUDFLARE",
+      service: "acme-cloudflare-os-cloudflare",
+      entrypoint: "GatekeeperVendor",
+    },
+    {
+      binding: "GATEKEEPER_MCP_PORTAL",
+      service: "acme-cloudflare-os-mcp-portal",
       entrypoint: "GatekeeperVendor",
     },
   ]);
@@ -268,6 +307,10 @@ test("gives the router the public route, the frontend, and every service binding
     { binding: "GATEKEEPER_CONTEXT", service: "acme-cloudflare-os-context" },
     { binding: "GATEKEEPER_SCHEDULER", service: "acme-cloudflare-os-scheduler" },
     { binding: "GATEKEEPER_CUSTOM", service: "acme-cloudflare-os-custom" },
+    { binding: "GATEKEEPER_GITHUB", service: "acme-cloudflare-os-github" },
+    { binding: "GATEKEEPER_GOOGLE", service: "acme-cloudflare-os-google" },
+    { binding: "GATEKEEPER_CLOUDFLARE", service: "acme-cloudflare-os-cloudflare" },
+    { binding: "GATEKEEPER_MCP_PORTAL", service: "acme-cloudflare-os-mcp-portal" },
   ]);
   // Inherited untouched: the base config already carries the ASSETS binding, the SPA fallback, and
   // the /gatekeeper/* prefix an OAuth Gatekeeper redirect needs.

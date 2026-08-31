@@ -25,6 +25,10 @@ const packageDirs = {
   context: "cloudflare-os/packages/gatekeeper-context",
   scheduler: "cloudflare-os/packages/gatekeeper-scheduler",
   customGatekeeper: "packages/custom-gatekeeper",
+  github: "cloudflare-os/packages/gatekeeper-github",
+  google: "cloudflare-os/packages/gatekeeper-google",
+  cloudflare: "cloudflare-os/packages/gatekeeper-cloudflare",
+  mcpPortal: "cloudflare-os/packages/gatekeeper-mcp-portal",
   errorReporter: "packages/error-reporter",
 } as const;
 const generatedPaths = Object.fromEntries(
@@ -40,6 +44,10 @@ const requiredPaths = [
   "workers.context.name",
   "workers.scheduler.name",
   "workers.customGatekeeper.name",
+  "workers.github.name",
+  "workers.google.name",
+  "workers.cloudflare.name",
+  "workers.mcpPortal.name",
   "access.issuer",
   "access.audience",
   "access.admins",
@@ -47,6 +55,7 @@ const requiredPaths = [
   "errorReporting.enabled",
   "customGatekeeper.name",
   "customGatekeeper.message",
+  "mcpPortal.portalUrl",
   "observability.enabled",
   "observability.headSamplingRate",
   "observability.logs.invocationLogs",
@@ -435,6 +444,10 @@ export function generateConfigs(config: DeploymentConfig, bases: BaseConfigs): G
   const context = structuredClone(bases.context);
   const scheduler = structuredClone(bases.scheduler);
   const customGatekeeper = structuredClone(bases.customGatekeeper);
+  const github = structuredClone(bases.github);
+  const google = structuredClone(bases.google);
+  const cloudflareGatekeeper = structuredClone(bases.cloudflare);
+  const mcpPortal = structuredClone(bases.mcpPortal);
   const errorReporter = config.errorReporting.enabled
     ? structuredClone(bases.errorReporter)
     : undefined;
@@ -448,6 +461,10 @@ export function generateConfigs(config: DeploymentConfig, bases: BaseConfigs): G
     { binding: "GATEKEEPER_CONTEXT", service: config.workers.context.name },
     { binding: "GATEKEEPER_SCHEDULER", service: config.workers.scheduler.name },
     { binding: "GATEKEEPER_CUSTOM", service: config.workers.customGatekeeper.name },
+    { binding: "GATEKEEPER_GITHUB", service: config.workers.github.name },
+    { binding: "GATEKEEPER_GOOGLE", service: config.workers.google.name },
+    { binding: "GATEKEEPER_CLOUDFLARE", service: config.workers.cloudflare.name },
+    { binding: "GATEKEEPER_MCP_PORTAL", service: config.workers.mcpPortal.name },
   ];
 
   setCommon(workshop, config, config.workers.workshop.name);
@@ -513,6 +530,28 @@ export function generateConfigs(config: DeploymentConfig, bases: BaseConfigs): G
       service: config.workers.customGatekeeper.name,
       entrypoint: "GatekeeperVendor",
     },
+    // No props on any of these four: each reads its own config from its own vars (BASE_URL,
+    // CLIENT_ID/CLIENT_SECRET, MCP_PORTAL_URL below), unlike Context's sharingDomain prop.
+    {
+      binding: "GATEKEEPER_GITHUB",
+      service: config.workers.github.name,
+      entrypoint: "GatekeeperVendor",
+    },
+    {
+      binding: "GATEKEEPER_GOOGLE",
+      service: config.workers.google.name,
+      entrypoint: "GatekeeperVendor",
+    },
+    {
+      binding: "GATEKEEPER_CLOUDFLARE",
+      service: config.workers.cloudflare.name,
+      entrypoint: "GatekeeperVendor",
+    },
+    {
+      binding: "GATEKEEPER_MCP_PORTAL",
+      service: config.workers.mcpPortal.name,
+      entrypoint: "GatekeeperVendor",
+    },
   ];
   workshop.kv_namespaces = [
     { binding: "BLUEPRINTS", ...(config.resources.blueprintsKvNamespaceId
@@ -552,12 +591,44 @@ export function generateConfigs(config: DeploymentConfig, bases: BaseConfigs): G
     CUSTOM_MESSAGE: config.customGatekeeper.message,
   };
 
+  // GitHub, Google, and Cloudflare are OAuth connector Gatekeepers: each answers its own
+  // `/gatekeeper/<name>/oauth` callback (BASE_URL), and each needs a CLIENT_ID/CLIENT_SECRET pair
+  // from an OAuth app registered with that provider. Secrets are never deployment.jsonc values (see
+  // the file's own header comment). `secrets.required` behaves differently depending on whether the
+  // Worker already exists: once it exists, `wrangler deploy` ignores missing secrets and the Worker
+  // just shows a "not configured" page until `wrangler secret put` installs them; on that Worker's
+  // very first deploy, wrangler refuses outright ("required secrets have not been set") because
+  // `wrangler secret put` cannot target a script that doesn't exist yet -- that first deploy needs
+  // `wrangler deploy --secrets-file <path>` instead, a one-time bootstrap step.
+  setCommon(github, config, config.workers.github.name);
+  github.vars = { BASE_URL: `${origin}/gatekeeper/github` };
+  github.secrets = { required: ["CLIENT_ID", "CLIENT_SECRET"] };
+
+  setCommon(google, config, config.workers.google.name);
+  google.vars = { BASE_URL: `${origin}/gatekeeper/google` };
+  google.secrets = { required: ["CLIENT_ID", "CLIENT_SECRET"] };
+
+  setCommon(cloudflareGatekeeper, config, config.workers.cloudflare.name);
+  cloudflareGatekeeper.vars = { BASE_URL: `${origin}/gatekeeper/cloudflare` };
+  cloudflareGatekeeper.secrets = { required: ["CLIENT_ID", "CLIENT_SECRET"] };
+
+  // Not an OAuth connector: it points at an already-existing MCP Server Portal, so it needs no
+  // secrets of its own (dynamic client registration handles the portal's own OAuth) -- only the
+  // portal's URL, a plain (non-secret) deployment.jsonc value.
+  setCommon(mcpPortal, config, config.workers.mcpPortal.name);
+  mcpPortal.vars = {
+    ...mcpPortal.vars,
+    BASE_URL: `${origin}/gatekeeper/mcp-portal`,
+    MCP_PORTAL_URL: config.mcpPortal.portalUrl,
+  };
+
   if (errorReporter) {
     setCommon(errorReporter, config, config.workers.errorReporter!.name);
   }
 
   return {
     router, workshop, context, scheduler, customGatekeeper,
+    github, google, cloudflare: cloudflareGatekeeper, mcpPortal,
     ...(errorReporter && { errorReporter }),
   };
 }
@@ -605,6 +676,13 @@ export function buildCommands(config: DeploymentConfig): BuildCommand[] {
     { args: submoduleBuild("@gadgets/gatekeeper-scheduler", "build:app") },
     { args: submoduleBuild("@gadgets/gatekeeper-scheduler") },
     { args: ownBuild("custom-gatekeeper") },
+    // GitHub/Google/Cloudflare/MCP-Portal have no plain "build" script -- only "build:configurator"
+    // (their own package.json `deploy` scripts run exactly this before `wrangler deploy`, which is
+    // what `deployWorker()` runs below).
+    { args: submoduleBuild("@gadgets/github-gatekeeper", "build:configurator") },
+    { args: submoduleBuild("@gadgets/google-gatekeeper", "build:configurator") },
+    { args: submoduleBuild("@gadgets/cloudflare-gatekeeper", "build:configurator") },
+    { args: submoduleBuild("@gadgets/mcp-portal-gatekeeper", "build:configurator") },
     ...(config.errorReporting.enabled ? [{ args: ownBuild("error-reporter") }] : []),
     // Access mode is a build-time constant in the frontend bundle (`src/useAuth.ts`), so it is set
     // here rather than inherited: a bundle built under a different value is wrong, not just stale.
@@ -711,6 +789,30 @@ function reportAiGateway(config: DeploymentConfig): void {
     `--name ${config.workers.workshop.name}\n`);
 }
 
+// Said once, up front: on a Worker that already exists, missing CLIENT_ID/CLIENT_SECRET just leaves
+// it showing a "not configured" page -- this tells the operator how to finish setting them up. On
+// that Worker's first-ever deploy, missing secrets make wrangler refuse to deploy at all (it cannot
+// `secret put` onto a script that doesn't exist yet); the fix there is a one-time
+// `wrangler deploy --secrets-file <path>` bootstrap, not the commands below.
+function reportGatekeeperSecrets(config: DeploymentConfig): void {
+  const gatekeepers: Array<["github" | "google" | "cloudflare", string]> = [
+    ["github", config.workers.github.name],
+    ["google", config.workers.google.name],
+    ["cloudflare", config.workers.cloudflare.name],
+  ];
+  console.warn(
+    "\nGitHub/Google/Cloudflare are OAuth connector Gatekeepers. Each needs its own CLIENT_ID and " +
+    "CLIENT_SECRET installed as Worker secrets before it works -- register an OAuth app with " +
+    `the provider using the redirect URI https://${new URL(publicOrigin(config)).host}` +
+    "/gatekeeper/<name>/oauth, then install (first-ever deploy of one of these needs " +
+    "`wrangler deploy --secrets-file <path>` instead -- `secret put` can't target a Worker that " +
+    "doesn't exist yet):\n" +
+    gatekeepers.map(([name, workerName]) =>
+      `  pnpm exec wrangler secret put CLIENT_ID --name ${workerName}\n` +
+      `  pnpm exec wrangler secret put CLIENT_SECRET --name ${workerName}`,
+    ).join("\n") + "\n");
+}
+
 async function main(): Promise<void> {
   requireSubmodule();
   const config = await readDeployment(join(root, "deployment.jsonc"));
@@ -720,9 +822,14 @@ async function main(): Promise<void> {
     context: await readJsonc(join(root, packageDirs.context, "wrangler.jsonc")),
     scheduler: await readJsonc(join(root, packageDirs.scheduler, "wrangler.jsonc")),
     customGatekeeper: await readJsonc(join(root, packageDirs.customGatekeeper, "wrangler.jsonc")),
+    github: await readJsonc(join(root, packageDirs.github, "wrangler.jsonc")),
+    google: await readJsonc(join(root, packageDirs.google, "wrangler.jsonc")),
+    cloudflare: await readJsonc(join(root, packageDirs.cloudflare, "wrangler.jsonc")),
+    mcpPortal: await readJsonc(join(root, packageDirs.mcpPortal, "wrangler.jsonc")),
     errorReporter: await readJsonc(join(root, packageDirs.errorReporter, "wrangler.jsonc")),
   });
   reportAiGateway(config);
+  reportGatekeeperSecrets(config);
 
   try {
     for (const [name, generatedConfig] of Object.entries(generated)) {
@@ -740,6 +847,10 @@ async function main(): Promise<void> {
     deployWorker(packageDirs.context, deployArgs);
     deployWorker(packageDirs.scheduler, deployArgs);
     deployWorker(packageDirs.customGatekeeper, deployArgs);
+    deployWorker(packageDirs.github, deployArgs);
+    deployWorker(packageDirs.google, deployArgs);
+    deployWorker(packageDirs.cloudflare, deployArgs);
+    deployWorker(packageDirs.mcpPortal, deployArgs);
     deployWorker(packageDirs.workshop, deployArgs);
     // Last: it binds every one of the above.
     deployWorker(packageDirs.router, deployArgs);

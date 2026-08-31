@@ -14,11 +14,12 @@ import type {
 } from "../cloudflare-os/scripts/release/manifest-lib.ts";
 
 /** A model provider the Workshop can serve through AI Gateway with deployment-managed keys. */
-export type AiGatewayProvider = "anthropic" | "openai" | "google" | "cloudflare";
+export type AiGatewayProvider =
+  "anthropic" | "openai" | "google" | "cloudflare" | "cloudflare-ai-gateway";
 
 /** Every provider {@link AiGatewayProvider} allows, for validation and for error messages. */
 export const AI_GATEWAY_PROVIDERS: readonly AiGatewayProvider[] =
-  ["anthropic", "openai", "google", "cloudflare"];
+  ["anthropic", "openai", "google", "cloudflare", "cloudflare-ai-gateway"];
 
 /**
  * The public address of the router Worker. Exactly one field is set; `validateConfig` enforces
@@ -112,6 +113,14 @@ export interface DeploymentConfig {
     context: { name: string };
     scheduler: { name: string };
     customGatekeeper: { name: string };
+    /** GitHub OAuth connector Gatekeeper. Secrets (CLIENT_ID/CLIENT_SECRET) install separately. */
+    github: { name: string };
+    /** Google OAuth connector Gatekeeper. Secrets (CLIENT_ID/CLIENT_SECRET) install separately. */
+    google: { name: string };
+    /** Cloudflare dashboard OAuth connector Gatekeeper. Secrets install separately. */
+    cloudflare: { name: string };
+    /** MCP Server Portal Gatekeeper, pointed at an existing portal via {@link DeploymentConfig.mcpPortal}. */
+    mcpPortal: { name: string };
     /** Only required when `errorReporting.enabled`. */
     errorReporter?: { name: string };
   };
@@ -120,6 +129,8 @@ export interface DeploymentConfig {
   context: ContextConfig;
   /** Display text the example custom Gatekeeper serves to agents. */
   customGatekeeper: { name: string; message: string };
+  /** The existing MCP Server Portal this deployment points its portal Gatekeeper at. */
+  mcpPortal: { portalUrl: string };
   /** Private explicit-issue destination. */
   errorReporting: { enabled: boolean; environment?: string; release?: string | null };
   /** Workshop KV/R2. `null` requests Wrangler automatic provisioning. */
@@ -182,6 +193,10 @@ export interface GeneratedConfigs {
   context: ProdWranglerConfig;
   scheduler: ProdWranglerConfig;
   customGatekeeper: ProdWranglerConfig;
+  github: ProdWranglerConfig;
+  google: ProdWranglerConfig;
+  cloudflare: ProdWranglerConfig;
+  mcpPortal: ProdWranglerConfig;
   /** Absent when `errorReporting.enabled` is false. */
   errorReporter?: ProdWranglerConfig;
 }
@@ -193,6 +208,10 @@ export interface BaseConfigs {
   context: ProdWranglerConfig;
   scheduler: ProdWranglerConfig;
   customGatekeeper: ProdWranglerConfig;
+  github: ProdWranglerConfig;
+  google: ProdWranglerConfig;
+  cloudflare: ProdWranglerConfig;
+  mcpPortal: ProdWranglerConfig;
   errorReporter: ProdWranglerConfig;
 }
 
